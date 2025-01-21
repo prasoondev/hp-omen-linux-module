@@ -20,6 +20,8 @@ Currently working:
 
 Module will be built and installed, and DKMS will manage rebuilding it on kernel updates.
 
+Reboot once after the install.
+
 ## Usage
 
 The module creates four files in `/sys/devices/platform/hp-wmi/rgb_zones/` named `zone00 - zone03`.
