@@ -544,16 +544,19 @@ static DEVICE_ATTR_RO(dock);
 static DEVICE_ATTR_RO(tablet);
 static DEVICE_ATTR_RW(postcode);
 
-static void hp_wmi_notify(u32 value, void *context)
+static void hp_wmi_notify(union acpi_object *obj, void *context)
 {
   struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
   u32 event_id, event_data;
-  union acpi_object *obj;
-  acpi_status status;
   u32 *location;
   int key_code;
+  acpi_status status;
 
-  status = wmi_get_event_data(value, &response);
+  // Replace wmi_get_event_data with acpi_evaluate_object
+  char method[16];
+  snprintf(method, sizeof(method), "_WED"); // Replace "_WED" with the actual ACPI method if different
+  status = acpi_evaluate_object(NULL, method, NULL, &response);
+
   if (status == AE_NOT_FOUND)
   {
     // We've been woken up without any event data
@@ -561,7 +564,7 @@ static void hp_wmi_notify(u32 value, void *context)
     event_id = HPWMI_OMEN_KEY;
   }
   else if (status != AE_OK) {
-    pr_info("bad event value 0x%x status 0x%x\n", value, status);
+    pr_info("bad event value 0x%x status 0x%x\n", 0, status);
     return;
   }
   else
@@ -577,9 +580,9 @@ static void hp_wmi_notify(u32 value, void *context)
     }
 
     /*
-    * Depending on ACPI version the concatenation of id and event data
-    * inside _WED function will result in a 8 or 16 byte buffer.
-    */
+     * Depending on ACPI version the concatenation of id and event data
+     * inside _WED function will result in a 8 or 16 byte buffer.
+     */
     location = (u32 *)obj->buffer.pointer;
     if (obj->buffer.length == 8) {
       event_id = *location;
@@ -596,76 +599,77 @@ static void hp_wmi_notify(u32 value, void *context)
   }
 
   switch (event_id) {
-  case HPWMI_DOCK_EVENT:
-    if (test_bit(SW_DOCK, hp_wmi_input_dev->swbit))
-      input_report_switch(hp_wmi_input_dev, SW_DOCK,
-              hp_wmi_hw_state(HPWMI_DOCK_MASK));
-    if (test_bit(SW_TABLET_MODE, hp_wmi_input_dev->swbit))
-      input_report_switch(hp_wmi_input_dev, SW_TABLET_MODE,
-              hp_wmi_hw_state(HPWMI_TABLET_MASK));
-    input_sync(hp_wmi_input_dev);
-    break;
-  case HPWMI_PARK_HDD:
-    break;
-  case HPWMI_SMART_ADAPTER:
-    break;
-  case HPWMI_BEZEL_BUTTON:
-  case HPWMI_OMEN_KEY:
-    key_code = hp_wmi_read_int(HPWMI_HOTKEY_QUERY);
-    // Some hotkeys generate both press and release events
-    // Just drop the release events.
-    if (key_code < 0 || (key_code & HPWMI_HOTKEY_RELEASE_FLAG))
+    case HPWMI_DOCK_EVENT:
+      if (test_bit(SW_DOCK, hp_wmi_input_dev->swbit))
+        input_report_switch(hp_wmi_input_dev, SW_DOCK,
+                            hp_wmi_hw_state(HPWMI_DOCK_MASK));
+        if (test_bit(SW_TABLET_MODE, hp_wmi_input_dev->swbit))
+          input_report_switch(hp_wmi_input_dev, SW_TABLET_MODE,
+                              hp_wmi_hw_state(HPWMI_TABLET_MASK));
+          input_sync(hp_wmi_input_dev);
+        break;
+    case HPWMI_PARK_HDD:
       break;
+    case HPWMI_SMART_ADAPTER:
+      break;
+    case HPWMI_BEZEL_BUTTON:
+    case HPWMI_OMEN_KEY:
+      key_code = hp_wmi_read_int(HPWMI_HOTKEY_QUERY);
+      // Some hotkeys generate both press and release events
+      // Just drop the release events.
+      if (key_code < 0 || (key_code & HPWMI_HOTKEY_RELEASE_FLAG))
+        break;
 
     if (!sparse_keymap_report_event(hp_wmi_input_dev,
-            key_code, 1, true))
+      key_code, 1, true))
       pr_info("Unknown key code - 0x%x\n", key_code);
     break;
-  case HPWMI_WIRELESS:
-    if (rfkill2_count) {
-      hp_wmi_rfkill2_refresh();
-      break;
-    }
+    case HPWMI_WIRELESS:
+      if (rfkill2_count) {
+        hp_wmi_rfkill2_refresh();
+        break;
+      }
 
-    if (wifi_rfkill)
-      rfkill_set_states(wifi_rfkill,
-            hp_wmi_get_sw_state(HPWMI_WIFI),
-            hp_wmi_get_hw_state(HPWMI_WIFI));
-    if (bluetooth_rfkill)
-      rfkill_set_states(bluetooth_rfkill,
-            hp_wmi_get_sw_state(HPWMI_BLUETOOTH),
-            hp_wmi_get_hw_state(HPWMI_BLUETOOTH));
-    if (wwan_rfkill)
-      rfkill_set_states(wwan_rfkill,
-            hp_wmi_get_sw_state(HPWMI_WWAN),
-            hp_wmi_get_hw_state(HPWMI_WWAN));
-    break;
-  case HPWMI_CPU_BATTERY_THROTTLE:
-    pr_info("Unimplemented CPU throttle because of 3 Cell battery event detected\n");
-    break;
-  case HPWMI_LOCK_SWITCH:
-    break;
-  case HPWMI_LID_SWITCH:
-    break;
-  case HPWMI_SCREEN_ROTATION:
-    break;
-  case HPWMI_COOLSENSE_SYSTEM_MOBILE:
-    break;
-  case HPWMI_COOLSENSE_SYSTEM_HOT:
-    break;
-  case HPWMI_PROXIMITY_SENSOR:
-    break;
-  case HPWMI_BACKLIT_KB_BRIGHTNESS:
-    break;
-  case HPWMI_PEAKSHIFT_PERIOD:
-    break;
-  case HPWMI_BATTERY_CHARGE_PERIOD:
-    break;
-  default:
-    pr_info("Unknown event_id - %d - 0x%x\n", event_id, event_data);
-    break;
+      if (wifi_rfkill)
+        rfkill_set_states(wifi_rfkill,
+                          hp_wmi_get_sw_state(HPWMI_WIFI),
+                          hp_wmi_get_hw_state(HPWMI_WIFI));
+        if (bluetooth_rfkill)
+          rfkill_set_states(bluetooth_rfkill,
+                            hp_wmi_get_sw_state(HPWMI_BLUETOOTH),
+                            hp_wmi_get_hw_state(HPWMI_BLUETOOTH));
+          if (wwan_rfkill)
+            rfkill_set_states(wwan_rfkill,
+                              hp_wmi_get_sw_state(HPWMI_WWAN),
+                              hp_wmi_get_hw_state(HPWMI_WWAN));
+            break;
+    case HPWMI_CPU_BATTERY_THROTTLE:
+      pr_info("Unimplemented CPU throttle because of 3 Cell battery event detected\n");
+      break;
+    case HPWMI_LOCK_SWITCH:
+      break;
+    case HPWMI_LID_SWITCH:
+      break;
+    case HPWMI_SCREEN_ROTATION:
+      break;
+    case HPWMI_COOLSENSE_SYSTEM_MOBILE:
+      break;
+    case HPWMI_COOLSENSE_SYSTEM_HOT:
+      break;
+    case HPWMI_PROXIMITY_SENSOR:
+      break;
+    case HPWMI_BACKLIT_KB_BRIGHTNESS:
+      break;
+    case HPWMI_PEAKSHIFT_PERIOD:
+      break;
+    case HPWMI_BATTERY_CHARGE_PERIOD:
+      break;
+    default:
+      pr_info("Unknown event_id - %d - 0x%x\n", event_id, event_data);
+      break;
   }
 }
+
 
 static int __init hp_wmi_input_setup(void)
 {
@@ -1173,7 +1177,7 @@ add_sysfs_error:
   return err;
 }
 
-static int __exit hp_wmi_bios_remove(struct platform_device *device)
+static void __exit hp_wmi_bios_remove(struct platform_device *device)
 {
   int i;
   cleanup_sysfs(device);
@@ -1196,7 +1200,7 @@ static int __exit hp_wmi_bios_remove(struct platform_device *device)
     rfkill_destroy(wwan_rfkill);
   }
 
-  return 0;
+  return;
 }
 
 static int hp_wmi_resume_handler(struct device *device)
